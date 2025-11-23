@@ -9,8 +9,10 @@ import {
   Share2,
   FileText,
   Table,
+  Download,
 } from "lucide-react";
-import heicConvert from "heic-convert/browser"; // Use browser build if available, or just 'heic-convert' and see if vite handles it
+import heicConvert from "heic-convert"; // Use browser build if available, or just 'heic-convert' and see if vite handles it
+import * as XLSX from "xlsx";
 import { extractTextFromImage } from "./services/gemini";
 import "./index.css";
 
@@ -22,7 +24,7 @@ function App() {
   const [processingPreview, setProcessingPreview] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState(null);
-  const [format, setFormat] = useState("text"); // 'text' or 'structure' (CSV)
+  const [format, setFormat] = useState("text"); // 'text' or 'structure' (Excel)
 
   const handleFileSelect = async (file) => {
     if (!file) return;
@@ -157,22 +159,75 @@ function App() {
     }
   };
 
+  const generateExcelFile = () => {
+    try {
+      // Parse CSV text to workbook
+      const workbook = XLSX.read(text, { type: "string", raw: true });
+      // If read fails to detect CSV properly, we might need to parse manually and use utils.aoa_to_sheet
+      // But XLSX.read usually handles CSV strings well.
+
+      // Write to buffer
+      const excelBuffer = XLSX.write(workbook, {
+        bookType: "xlsx",
+        type: "array",
+      });
+      return new File([excelBuffer], "extracted_data.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+    } catch (e) {
+      console.error("Error generating Excel:", e);
+      // Fallback: try manual parsing if XLSX.read failed on string
+      const rows = parseCSV(text);
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      const excelBuffer = XLSX.write(wb, {
+        bookType: "xlsx",
+        type: "array",
+      });
+      return new File([excelBuffer], "extracted_data.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+    }
+  };
+
+  const downloadFile = (file) => {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const shareResult = async () => {
     if (!text) return;
 
     try {
-      // If CSV format, try to share as a file
+      // If Excel format
       if (format === "structure") {
-        const file = new File([text], "extracted_data.csv", {
-          type: "text/csv",
-        });
+        const file = generateExcelFile();
 
         if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({
-            files: [file],
-            title: "Extracted CSV Data",
-            text: "Here is the extracted CSV data.",
-          });
+          try {
+            await navigator.share({
+              files: [file],
+              title: "Extracted Excel Data",
+              text: "Here is the extracted data in Excel format.",
+            });
+            return;
+          } catch (shareErr) {
+            if (shareErr.name !== "AbortError") {
+              // If share fails (but was supported), fallback to download
+              downloadFile(file);
+            }
+            return;
+          }
+        } else {
+          // Fallback to download if sharing not supported
+          downloadFile(file);
           return;
         }
       }
@@ -184,7 +239,7 @@ function App() {
           text: text,
         });
       } else {
-        // Fallback
+        // Fallback for text: copy to clipboard
         copyToClipboard();
         alert(
           "Sharing is not supported on this browser. Text copied to clipboard instead."
@@ -192,11 +247,8 @@ function App() {
       }
     } catch (err) {
       console.log("Error sharing:", err);
-      // Fallback if sharing fails (e.g. user cancelled or error)
-      // We don't alert here to avoid annoying the user if they just cancelled
       if (err.name !== "AbortError") {
-        copyToClipboard();
-        alert("Sharing failed. Text copied to clipboard instead.");
+        alert("Sharing failed.");
       }
     }
   };
@@ -317,7 +369,7 @@ function App() {
             onClick={() => handleFormatChange("structure")}
           >
             <Table size={16} />
-            CSV Format
+            Excel Format (.xlsx)
           </button>
         </div>
 
@@ -470,30 +522,6 @@ function App() {
           </div>
         )}
 
-        {/* Loading State */}
-        {loading && (
-          <div
-            className="loading-state"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "0.5rem",
-              color: "var(--primary-color)",
-              padding: "1rem",
-            }}
-          >
-            <Loader2
-              className="animate-spin"
-              size={24}
-              style={{ animation: "spin 1s linear infinite" }}
-            />
-            <span className="font-medium">
-              Extracting text with Gemini AI...
-            </span>
-          </div>
-        )}
-
         {/* Error State */}
         {error && (
           <div
@@ -511,7 +539,7 @@ function App() {
         )}
 
         {/* Result Section */}
-        {text && (
+        {(text || loading) && (
           <div
             className="result-section"
             style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
@@ -525,13 +553,17 @@ function App() {
               }}
             >
               <h2 style={{ fontSize: "1.25rem", fontWeight: 600 }}>
-                Extracted Text
+                {loading ? "Extracting Text..." : "Extracted Text"}
               </h2>
               <div
                 className="actions"
                 style={{ display: "flex", gap: "0.5rem" }}
               >
-                <button className="btn secondary" onClick={copyToClipboard}>
+                <button
+                  className="btn secondary"
+                  onClick={copyToClipboard}
+                  disabled={loading}
+                >
                   {copied ? <Check size={16} /> : <Copy size={16} />}
                   {copied ? "Copied!" : "Copy"}
                 </button>
@@ -539,6 +571,7 @@ function App() {
                   className="btn secondary"
                   onClick={shareResult}
                   title="Share"
+                  disabled={loading}
                 >
                   <Share2 size={16} />
                   Share
@@ -549,26 +582,56 @@ function App() {
               </div>
             </div>
 
-            {/* Table Preview */}
-            {format === "structure" && renderTable()}
-
-            {/* Text Area - Only show if format is text */}
-            {format === "text" && (
-              <textarea
-                readOnly
-                value={text}
+            {loading ? (
+              <div
+                className="loading-container"
                 style={{
-                  width: "100%",
-                  height: "200px",
-                  padding: "1rem",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "var(--radius-md)",
-                  resize: "vertical",
-                  fontFamily: "inherit",
-                  fontSize: "1rem",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: "3rem",
                   background: "#f8fafc",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-color)",
+                  color: "var(--text-secondary)",
+                  minHeight: "200px",
                 }}
-              />
+              >
+                <Loader2
+                  className="animate-spin"
+                  size={32}
+                  style={{
+                    marginBottom: "1rem",
+                    color: "var(--primary-color)",
+                  }}
+                />
+                <p>Analyzing image and extracting text...</p>
+              </div>
+            ) : (
+              <>
+                {/* Table Preview */}
+                {format === "structure" && renderTable()}
+
+                {/* Text Area - Only show if format is text */}
+                {format === "text" && (
+                  <textarea
+                    readOnly
+                    value={text}
+                    style={{
+                      width: "100%",
+                      height: "200px",
+                      padding: "1rem",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: "var(--radius-md)",
+                      resize: "vertical",
+                      fontFamily: "inherit",
+                      fontSize: "1rem",
+                      background: "#f8fafc",
+                    }}
+                  />
+                )}
+              </>
             )}
           </div>
         )}
