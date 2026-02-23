@@ -1,14 +1,14 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-// Initialize the API with the provided key
+// Initialize the API with key from environment variable
 // NOTE: In a production app, this should be proxied through a backend.
-const API_KEY = "AIzaSyDtchUXIM7phDiq6sQ8R-uhDj6sItHawbY";
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY;
 const genAI = new GoogleGenerativeAI(API_KEY);
 
 export async function extractTextFromImage(file, format = "text") {
   try {
-    // Using Gemini 2.0 Flash Experimental as requested (closest to Gemini 2 Pro available)
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash-exp" });
+    // Using Gemini 2.0 Flash
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
     // Convert file to base64
     const base64Data = await fileToGenerativePart(file);
